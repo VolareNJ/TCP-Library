@@ -1,4 +1,8 @@
-﻿namespace net
+﻿#pragma once
+
+#include<vector>
+
+namespace net
 {
     namespace clib
     {
@@ -12,14 +16,20 @@
         #include<stdlib.h>
         #include<endian.h>
 
-        // 编译期判断主机字节序，避免在每个对象中存储运行时标记
-        // 使用 POSIX 标准的 endian.h 宏，在编译时确定大小端
-        #if BYTE_ORDER == LITTLE_ENDIAN
-            constexpr bool kIsLittleEndian = true;
-        #else
-            constexpr bool kIsLittleEndian = false;
-        #endif
+// 编译期判断主机字节序，避免在每个对象中存储运行时标记
+// 使用 POSIX 标准的 endian.h 宏，在编译时确定大小端
+#if BYTE_ORDER == LITTLE_ENDIAN
+        constexpr bool kIsLittleEndian = true;
+#else
+        constexpr bool kIsLittleEndian = false;
+#endif
     }
+
+    struct recv_ret
+    {
+        bool success;
+        std::vector<char> content;
+    };
 
     class socket
     {
@@ -166,6 +176,26 @@
             // 通过私有构造函数创建客户端 socket，标记为 m_is_client_sock = true
             // 客户端 socket 继承监听 socket 的协议参数 m_param
             return socket(client_fd, m_param, client_addr);
+        }
+
+        recv_ret receive(clib::ssize_t buffer_size)
+        {
+            require_client();
+            std::vector<char> buffer(buffer_size);
+            clib::ssize_t bytes_received = clib::recv(m_fd, buffer.data(), buffer.size(), 0);
+            if(bytes_received == -1)
+            {
+                return { false,std::move(std::vector<char>()) };
+            }
+            buffer.resize(bytes_received);
+            return { true,std::move(buffer) };
+        }
+
+        socket& send(const std::vector<char>& msg)
+        {
+            require_client();
+            clib::send(m_fd, msg.data(), msg.size(), 0);
+            return *this;
         }
 
     private:
