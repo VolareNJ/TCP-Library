@@ -1,29 +1,25 @@
 ﻿#pragma once
 
 #include<vector>
+#include<asm-generic/socket.h>
+#include<stdio.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+#include<unistd.h>
+#include<string.h>
+#include<stdlib.h>
+#include<endian.h>
 
 namespace net
 {
-    namespace clib
-    {
-        // 引入必要的系统头文件，封装底层 C API
-        #include<asm-generic/socket.h>
-        #include<stdio.h>
-        #include<sys/socket.h>
-        #include<netinet/in.h>
-        #include<unistd.h>
-        #include<string.h>
-        #include<stdlib.h>
-        #include<endian.h>
 
-// 编译期判断主机字节序，避免在每个对象中存储运行时标记
-// 使用 POSIX 标准的 endian.h 宏，在编译时确定大小端
+    // 编译期判断主机字节序，避免在每个对象中存储运行时标记
+    // 使用 POSIX 标准的 endian.h 宏，在编译时确定大小端
 #if BYTE_ORDER == LITTLE_ENDIAN
-        constexpr bool kIsLittleEndian = true;
+    constexpr bool kIsLittleEndian = true;
 #else
-        constexpr bool kIsLittleEndian = false;
+    constexpr bool kIsLittleEndian = false;
 #endif
-    }
 
     struct recv_ret
     {
@@ -39,15 +35,15 @@ namespace net
         // m_is_client_sock 初始化为 false（监听角色）
         socket(int domain, int type, int protocol)
             : m_param{ domain, type, protocol }
-            , m_fd(clib::socket(domain, type, protocol))
+            , m_fd(::socket(domain, type, protocol))
             , m_addr{}                     // 零初始化，避免未定义行为
             , m_is_client_sock(false)      // 标记为监听 socket
         {
             // 注意：socket() 失败返回 -1，而非 0（0 是有效 fd，此前错误地判断 ==0）
             if(m_fd == -1)
             {
-                clib::perror("socket creation failed\n");
-                clib::exit(1);
+                ::perror("socket creation failed\n");
+                ::exit(1);
             }
         }
 
@@ -72,7 +68,7 @@ namespace net
             {
                 // 关闭当前持有的 fd，防止资源泄漏
                 if(m_fd != -1)
-                    clib::close(m_fd);
+                    ::close(m_fd);
 
                 m_fd = other.m_fd;
                 m_addr = other.m_addr;
@@ -97,7 +93,7 @@ namespace net
         {
             if(m_fd != -1)
             {
-                clib::close(m_fd);
+                ::close(m_fd);
             }
         }
 
@@ -105,24 +101,24 @@ namespace net
         template<typename optival_t>
         socket& set_opt(int level, int optname, optival_t optval)
         {
-            if(clib::setsockopt(m_fd, level, optname, &optval, sizeof(optval)) == -1)
+            if(::setsockopt(m_fd, level, optname, &optval, sizeof(optval)) == -1)
             {
-                clib::perror("setsockopt failed\n");
-                clib::exit(1);
+                ::perror("setsockopt failed\n");
+                ::exit(1);
             }
             return *this;
         }
 
         // 预配置本地地址（不执行绑定），供后续 bind() 使用
         // 端口参数为主机字节序，内部转为网络字节序存储
-        socket& set_addr(const int sin_family, const clib::in_addr sin_addr, const int sin_port)
+        socket& set_addr(const int sin_family, const ::in_addr sin_addr, const int sin_port)
         {
             // 每次调用先清空结构体，确保 sin_zero 等字段确定
             m_addr = {};
             m_addr.sin_family = sin_family;
             m_addr.sin_addr = sin_addr;
             // 编译期字节序检测：小端系统需要 htons 转换，大端直接赋值
-            m_addr.sin_port = clib::kIsLittleEndian ? clib::htons(sin_port) : sin_port;
+            m_addr.sin_port = kIsLittleEndian ? ::htons(sin_port) : sin_port;
             return *this;
         }
 
@@ -130,17 +126,17 @@ namespace net
         socket& bind()
         {
             require_listener();   // 仅监听 socket 可调用
-            if(clib::bind(m_fd, (clib::sockaddr*)&m_addr, sizeof(m_addr)) == -1)
+            if(::bind(m_fd, (::sockaddr*)&m_addr, sizeof(m_addr)) == -1)
             {
-                clib::perror("bind failed\n");
-                clib::exit(1);
+                ::perror("bind failed\n");
+                ::exit(1);
             }
             return *this;
         }
 
         // 带参 bind：先设置地址再绑定，避免双重字节序转换
         // （原先有参 bind 自行转换端口，导致与 set_addr 发生双重转换的 bug）
-        socket& bind(const int sin_family, const clib::in_addr sin_addr, const int sin_port)
+        socket& bind(const int sin_family, const ::in_addr sin_addr, const int sin_port)
         {
             return this->set_addr(sin_family, sin_addr, sin_port).bind();
         }
@@ -149,14 +145,14 @@ namespace net
         socket& listen(int max_connections)
         {
             require_listener();
-            if(clib::listen(m_fd, max_connections) == -1)
+            if(::listen(m_fd, max_connections) == -1)
             {
-                clib::perror("listen failed\n");
-                clib::exit(1);
+                ::perror("listen failed\n");
+                ::exit(1);
             }
             // 打印端口时需将网络字节序转回主机字节序，保证可读性
-            clib::printf("Server is listening on port %d...\n",
-                clib::kIsLittleEndian ? clib::ntohs(m_addr.sin_port) : m_addr.sin_port);
+            ::printf("Server is listening on port %d...\n",
+                kIsLittleEndian ? ::ntohs(m_addr.sin_port) : m_addr.sin_port);
             return *this;
         }
 
@@ -165,24 +161,24 @@ namespace net
         socket accept()
         {
             require_listener();
-            clib::sockaddr_in client_addr{};                     // 值初始化
-            clib::socklen_t addr_len = sizeof(client_addr);
-            int client_fd = clib::accept(m_fd, (clib::sockaddr*)&client_addr, &addr_len);
+            ::sockaddr_in client_addr{};                     // 值初始化
+            ::socklen_t addr_len = sizeof(client_addr);
+            int client_fd = ::accept(m_fd, (::sockaddr*)&client_addr, &addr_len);
             if(client_fd == -1)
             {
-                clib::perror("accept failed\n");
-                clib::exit(1);
+                ::perror("accept failed\n");
+                ::exit(1);
             }
             // 通过私有构造函数创建客户端 socket，标记为 m_is_client_sock = true
             // 客户端 socket 继承监听 socket 的协议参数 m_param
             return socket(client_fd, m_param, client_addr);
         }
 
-        recv_ret receive(clib::ssize_t buffer_size)
+        recv_ret receive(::ssize_t buffer_size)
         {
             require_client();
             std::vector<char> buffer(buffer_size);
-            clib::ssize_t bytes_received = clib::recv(m_fd, buffer.data(), buffer.size(), 0);
+            ::ssize_t bytes_received = ::recv(m_fd, buffer.data(), buffer.size(), 0);
             if(bytes_received == -1)
             {
                 return { false,std::move(std::vector<char>()) };
@@ -194,19 +190,19 @@ namespace net
         socket& send(const std::vector<char>& msg)
         {
             require_client();
-            clib::send(m_fd, msg.data(), msg.size(), 0);
+            ::send(m_fd, msg.data(), msg.size(), 0);
             return *this;
         }
 
     private:
         int m_fd;                                     // 文件描述符，-1 表示无效
         struct param_t { int domain; int type; int protocol; } m_param; // 创建参数记录
-        clib::sockaddr_in m_addr;                     // 本地地址（监听 socket）或对端地址（客户端 socket）
+        ::sockaddr_in m_addr;                     // 本地地址（监听 socket）或对端地址（客户端 socket）
         bool m_is_client_sock;                        // 角色标记：true = 客户端, false = 监听
 
         // 私有构造函数，仅由 accept 调用，用于构造已连接的客户端 socket
         // 直接传入 fd 和已填充的客户端地址，并标记为客户端角色
-        explicit socket(int fd, struct param_t param, const clib::sockaddr_in addr)
+        explicit socket(int fd, struct param_t param, const ::sockaddr_in addr)
             : m_fd(fd)
             , m_param(param)
             , m_addr(addr)
@@ -219,8 +215,8 @@ namespace net
         {
             if(m_is_client_sock)
             {
-                clib::perror("operation only valid on listening socket\n");
-                clib::exit(1);
+                ::perror("operation only valid on listening socket\n");
+                ::exit(1);
             }
         }
 
@@ -229,8 +225,8 @@ namespace net
         {
             if(!m_is_client_sock)
             {
-                clib::perror("operation only valid on connected socket\n");
-                clib::exit(1);
+                ::perror("operation only valid on connected socket\n");
+                ::exit(1);
             }
         }
     };
