@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include<vector>
+#include<type_traits>
 #include<asm-generic/socket.h>
 #include<stdio.h>
 #include<sys/socket.h>
@@ -111,12 +112,12 @@ namespace net
 
         // 预配置本地地址（不执行绑定），供后续 bind() 使用
         // 端口参数为主机字节序，内部转为网络字节序存储
-        socket& set_addr(const int sin_family, const ::in_addr sin_addr, const int sin_port)
+        socket& set_addr(const int sin_family, const ::in_addr_t sin_addr, const int sin_port)
         {
             // 每次调用先清空结构体，确保 sin_zero 等字段确定
             m_addr = {};
             m_addr.sin_family = sin_family;
-            m_addr.sin_addr = sin_addr;
+            m_addr.sin_addr.s_addr = sin_addr;
             // 编译期字节序检测：小端系统需要 htons 转换，大端直接赋值
             m_addr.sin_port = kIsLittleEndian ? ::htons(sin_port) : sin_port;
             return *this;
@@ -136,7 +137,7 @@ namespace net
 
         // 带参 bind：先设置地址再绑定，避免双重字节序转换
         // （原先有参 bind 自行转换端口，导致与 set_addr 发生双重转换的 bug）
-        socket& bind(const int sin_family, const ::in_addr sin_addr, const int sin_port)
+        socket& bind(const int sin_family, const ::in_addr_t sin_addr, const int sin_port)
         {
             return this->set_addr(sin_family, sin_addr, sin_port).bind();
         }
@@ -191,6 +192,28 @@ namespace net
         {
             require_client();
             ::send(m_fd, msg.data(), msg.size(), 0);
+            return *this;
+        }
+
+        template<typename op_t, typename cond_t>
+        socket& loop(::ssize_t buffer_size, op_t op, cond_t cond)
+        requires(std::invocable<op_t, std::vector<char>> && std::invocable<cond_t, std::vector<char>>)
+        {
+            require_listener();
+            socket new_socket = this->accept();
+            recv_ret msg_received;
+            while(1)
+            {
+                msg_received = new_socket.receive(buffer_size);
+                if(msg_received.success)
+                {
+                    new_socket.send(op(msg_received.content));
+                }
+                if(cond(msg_received.content))
+                {
+                    break;
+                }
+            }
             return *this;
         }
 
